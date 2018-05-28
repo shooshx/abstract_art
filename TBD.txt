@@ -1,0 +1,12 @@
+shape
+  square grid
+  triangulation on random points
+  ability to move points manually
+  slight move randomally
+  lines
+
+color
+  linear gradient on triangulation of points
+  average across a triangle
+
+crop

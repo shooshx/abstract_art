@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Abstract Art</title>
+    <script src="delaunator.js"></script>
+<script>
+"use strict";
+
+var ctx = null
+var MARGIN = 10
+var WIDTH = null
+var HEIGHT = null
+
+function mdist(a, b) {
+    return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]))
+}
+function dist(a, b) {
+    var dx = a[0] - b[0], dy = a[1] - b[1]
+    return Math.sqrt(dx*dx+dy*dy)
+}
+
+function start()
+{
+    WIDTH = canvas.width - 2*MARGIN
+    HEIGHT = canvas.height - 2*MARGIN
+
+
+    setupMouseHandlers()
+
+    ctx = canvas.getContext('2d')
+    geomChange()
+}
+
+var points = []
+var lines = []
+
+function setupMouseHandlers()
+{
+    var mouseStart = null
+    var selected_point = null
+
+    canvas.addEventListener("mousedown", function(e) {
+        var x = e.clientX - canvas.offsetLeft
+        var y = e.clientY - canvas.offsetTop
+        mouseStart = [x, y]
+
+        // select point
+        if (show_point_handles.checked) {
+            selected_point = null
+            for(var pi in points) {
+                var p = points[pi]
+                if (mdist(mouseStart, p) < 7) {
+                    selected_point = p
+                    break
+                }
+            }
+        }
+    })
+    document.addEventListener("mouseup", function(e) {
+        mouseStart = null
+        selected_point = null
+    })
+    canvas.addEventListener("mousemove", function(e) {
+        var x = e.clientX - canvas.offsetLeft
+        var y = e.clientY - canvas.offsetTop
+        if (selected_point != null) {
+            selected_point[0] = x
+            selected_point[1] = y
+            draw()
+        }
+    })
+}
+
+var rnd_state = 0
+function rnd_seed(s) {
+    rnd_state = s
+}
+function rnd_next() {
+    rnd_state = (rnd_state * 1103515245 + 12345) % 2147483648
+    return rnd_state >> 8
+};
+
+function nearest_neighbor_dist(ofp) {
+    var min_d = Number.MAX_VALUE
+    for(var pi in points) {
+        var p = points[pi]
+        if (p === ofp)
+            continue
+        var d = dist(p, ofp)
+        if (d < min_d)
+            min_d = d
+    }
+    return min_d
+}
+
+
+function geomChange()
+{
+    points = []
+    lines = []
+
+    if (geom_align_quad.checked)
+    {
+        var x_count = parseInt(aquads_xcount.value)
+        var x_delta = WIDTH / (x_count)
+        var y_count = parseInt(aquads_ycount.value)
+        var y_delta = HEIGHT / (y_count)
+        var mat = []
+
+
+        for(var xi = 0; xi <= x_count; ++xi) {
+            var row = []
+            for(var yi = 0; yi <= y_count; ++yi) {
+                var p = [ xi*x_delta+MARGIN, yi*y_delta+MARGIN]
+                points.push(p)
+                row.push(p)
+            }
+            mat.push(row)
+        }
+
+        // connect points
+        for(var xi = 0; xi <= x_count; ++xi) {
+            for(var yi = 0; yi <= y_count; ++yi) {
+                if (xi < x_count)
+                    lines.push( [ mat[xi][yi], mat[xi+1][yi] ] )
+                if (yi < y_count)
+                    lines.push( [ mat[xi][yi], mat[xi][yi+1] ] )
+            }
+        }
+    }
+    else if (geom_tri.checked)
+    {
+        var p_count = parseInt(tri_count.value)
+        if (p_count < 4)
+            return
+        var seed = parseInt(tri_seed.value)
+        rnd_seed(seed)
+
+        // https://bost.ocks.org/mike/algorithms/
+        for(var pi = 0; pi < p_count; ++pi) {
+            var bestCandidate, bestDistance = 0;
+            for (var ti = 0; ti < 20; ++ti) {
+                var c = [rnd_next() % WIDTH+MARGIN, rnd_next() % HEIGHT+MARGIN],
+                d = nearest_neighbor_dist(c);
+                if (d > bestDistance) {
+                    bestDistance = d;
+                    bestCandidate = c;
+                }
+            }
+            points.push(bestCandidate)
+        }
+
+        var delaunay = Delaunator.from(points);
+        var triangles = delaunay.triangles
+
+        for (var i = 0; i < triangles.length; i += 3) {
+            var p0 = points[ triangles[i] ];
+            var p1 = points[ triangles[i + 1] ];
+            var p2 = points[ triangles[i + 2] ];
+            lines.push([p0,p1])
+            lines.push([p1,p2])
+            lines.push([p2,p0])
+        }
+
+    }
+
+
+    draw()
+}
+
+function draw()
+{
+    ctx.fillStyle = 'white'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.strokeStyle = 'rgba(0,0,0,1)'
+
+    ctx.beginPath()
+    console.log("lines=" + lines.length)
+    for(var li in lines) {
+        var l = lines[li]
+        ctx.moveTo(l[0][0], l[0][1])
+        ctx.lineTo(l[1][0], l[1][1])
+    }
+    ctx.stroke()
+
+    if (show_point_handles.checked) {
+        ctx.fillStyle = "rgba(255,20,20,0.6)"
+        for(var pi in points) {
+            var p = points[pi]
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], 4, 0, 2 * Math.PI, false);
+            ctx.fill()
+        }
+    }
+}
+
+
+</script>
+<style>
+body {
+    margin: 8px;
+    -moz-user-select: -moz-none;
+    -khtml-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+     user-select: none;
+    background: #ffffff;
+    font-family: Verdana;
+}
+
+#canvas {
+    border: 1px solid #000000;
+}
+.num_input {
+    width: 50px;
+}
+
+</style>
+</head>
+<body onload="start()">
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <br>
+    Show:
+    <input id="show_point_handles" type="checkbox" checked oninput="draw()">
+    <label for="show_point_handles">points</label>
+    <br>
+    <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geomChange()" checked>
+    <label for="geom_align_quad">Aligned Quads</label>
+    &nbsp;&nbsp;&nbsp;&nbsp;
+    x-count:<input id="aquads_xcount" class="num_input" type="number" value="15" oninput="geomChange()">
+    y-count:<input id="aquads_ycount" class="num_input" type="number" value="10" oninput="geomChange()">
+    <br>
+    <input id="geom_tri" type="radio" name="geom_sel" oninput="geomChange()" checked>
+    <label for="geom_tri">Triangles</label>
+    &nbsp;&nbsp;&nbsp;&nbsp;
+    point-count:<input id="tri_count" class="num_input" type="number" value="100" step="10" oninput="geomChange()">
+    rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geomChange()">
+
+
+</body>
+</html>
+
