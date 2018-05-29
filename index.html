@@ -25,15 +25,18 @@ function start()
     WIDTH = canvas.width - 2*MARGIN
     HEIGHT = canvas.height - 2*MARGIN
 
-
+    col_points = [[0,0,"#ff0000"], [1,0,"#00ff00"], [1,1,"#0000ff"], [0,1,"#ff00ff"]]
     setupMouseHandlers()
 
     ctx = canvas.getContext('2d')
-    geomChange()
+    geom_change()
+    col_change()
 }
 
 var points = []
 var lines = []
+var col_points = []
+var col_lines = []
 
 function setupMouseHandlers()
 {
@@ -41,8 +44,8 @@ function setupMouseHandlers()
     var selected_point = null
 
     canvas.addEventListener("mousedown", function(e) {
-        var x = e.clientX - canvas.offsetLeft
-        var y = e.clientY - canvas.offsetTop
+        var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
+        var y = (e.clientY - canvas.offsetTop - MARGIN)/HEIGHT
         mouseStart = [x, y]
 
         // select point
@@ -50,7 +53,7 @@ function setupMouseHandlers()
             selected_point = null
             for(var pi in points) {
                 var p = points[pi]
-                if (mdist(mouseStart, p) < 7) {
+                if (mdist(mouseStart, p) < 7/WIDTH) {
                     selected_point = p
                     break
                 }
@@ -62,8 +65,8 @@ function setupMouseHandlers()
         selected_point = null
     })
     canvas.addEventListener("mousemove", function(e) {
-        var x = e.clientX - canvas.offsetLeft
-        var y = e.clientY - canvas.offsetTop
+        var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
+        var y = (e.clientY - canvas.offsetTop - MARGIN)/HEIGHT
         if (selected_point != null) {
             selected_point[0] = x
             selected_point[1] = y
@@ -78,7 +81,7 @@ function rnd_seed(s) {
 }
 function rnd_next() {
     rnd_state = (rnd_state * 1103515245 + 12345) % 2147483648
-    return rnd_state >> 8
+    return rnd_state / 2147483648
 };
 
 function nearest_neighbor_dist(ofp) {
@@ -94,8 +97,21 @@ function nearest_neighbor_dist(ofp) {
     return min_d
 }
 
+function triangles_lines(triangles, points) {
+    var lines = []
+    for (var i = 0; i < triangles.length; i += 3) {
+        var p0 = points[ triangles[i] ];
+        var p1 = points[ triangles[i + 1] ];
+        var p2 = points[ triangles[i + 2] ];
+        lines.push([p0,p1])
+        lines.push([p1,p2])
+        lines.push([p2,p0])
+    }
+    return lines
+}
 
-function geomChange()
+
+function geom_change()
 {
     points = []
     lines = []
@@ -103,16 +119,16 @@ function geomChange()
     if (geom_align_quad.checked)
     {
         var x_count = parseInt(aquads_xcount.value)
-        var x_delta = WIDTH / (x_count)
+        var x_delta = 1 / (x_count)
         var y_count = parseInt(aquads_ycount.value)
-        var y_delta = HEIGHT / (y_count)
+        var y_delta = 1 / (y_count)
         var mat = []
 
 
         for(var xi = 0; xi <= x_count; ++xi) {
             var row = []
             for(var yi = 0; yi <= y_count; ++yi) {
-                var p = [ xi*x_delta+MARGIN, yi*y_delta+MARGIN]
+                var p = [ xi*x_delta, yi*y_delta]
                 points.push(p)
                 row.push(p)
             }
@@ -141,7 +157,7 @@ function geomChange()
         for(var pi = 0; pi < p_count; ++pi) {
             var bestCandidate, bestDistance = 0;
             for (var ti = 0; ti < 20; ++ti) {
-                var c = [rnd_next() % WIDTH+MARGIN, rnd_next() % HEIGHT+MARGIN],
+                var c = [rnd_next(), rnd_next()],
                 d = nearest_neighbor_dist(c);
                 if (d > bestDistance) {
                     bestDistance = d;
@@ -151,48 +167,64 @@ function geomChange()
             points.push(bestCandidate)
         }
 
-        var delaunay = Delaunator.from(points);
-        var triangles = delaunay.triangles
-
-        for (var i = 0; i < triangles.length; i += 3) {
-            var p0 = points[ triangles[i] ];
-            var p1 = points[ triangles[i + 1] ];
-            var p2 = points[ triangles[i + 2] ];
-            lines.push([p0,p1])
-            lines.push([p1,p2])
-            lines.push([p2,p0])
-        }
+        var delaunay = Delaunator.from(points)
+        lines = triangles_lines(delaunay.triangles, points)
 
     }
 
+    draw()
+}
+
+function col_change()
+{
+    var delaunay = Delaunator.from(col_points)
+    var triangles = delaunay.triangles
+    col_lines = triangles_lines(triangles, col_points)
 
     draw()
+}
+
+function draw_points(points, col)
+{
+    ctx.fillStyle = col
+    for(var pi in points) {
+        var p = points[pi]
+        ctx.beginPath();
+        ctx.arc(p[0]*WIDTH+MARGIN, p[1]*HEIGHT+MARGIN, 4, 0, 2 * Math.PI, false);
+        ctx.fill()
+    }
+}
+
+function draw_lines(lines, col)
+{
+    ctx.strokeStyle = col
+    ctx.beginPath()
+    for(var li in lines) {
+        var l = lines[li]
+        ctx.moveTo(l[0][0]*WIDTH+MARGIN, l[0][1]*HEIGHT+MARGIN)
+        ctx.lineTo(l[1][0]*WIDTH+MARGIN, l[1][1]*HEIGHT+MARGIN)
+    }
+    ctx.stroke()
 }
 
 function draw()
 {
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.strokeStyle = 'rgba(0,0,0,1)'
 
-    ctx.beginPath()
-    console.log("lines=" + lines.length)
-    for(var li in lines) {
-        var l = lines[li]
-        ctx.moveTo(l[0][0], l[0][1])
-        ctx.lineTo(l[1][0], l[1][1])
-    }
-    ctx.stroke()
 
-    if (show_point_handles.checked) {
-        ctx.fillStyle = "rgba(255,20,20,0.6)"
-        for(var pi in points) {
-            var p = points[pi]
-            ctx.beginPath();
-            ctx.arc(p[0], p[1], 4, 0, 2 * Math.PI, false);
-            ctx.fill()
-        }
-    }
+    if (show_geom_lines.checked)
+        draw_lines(lines, 'rgba(0,0,0,1)')
+
+    if (show_point_handles.checked)
+        draw_points(points, "rgba(255,20,20,0.6)")
+
+    if (show_col_point_handles.checked)
+        draw_points(col_points, "rgba(20,20,255,0.6)")
+
+    if (show_col_lines.checked)
+        draw_lines(col_lines, 'rgb(160,0,0,1)')
+
 }
 
 
@@ -222,20 +254,29 @@ body {
     <canvas id="canvas" width="800" height="600"></canvas>
     <br>
     Show:
+    <input id="show_geom_lines" type="checkbox" checked oninput="draw()">
+    <label for="show_geom_lines">geom-lines</label>
+    &nbsp;&nbsp;
     <input id="show_point_handles" type="checkbox" checked oninput="draw()">
     <label for="show_point_handles">points</label>
+    &nbsp;&nbsp;
+    <input id="show_col_point_handles" type="checkbox" checked oninput="draw()">
+    <label for="show_col_point_handles">color-points</label>
+    &nbsp;&nbsp;
+    <input id="show_col_lines" type="checkbox" checked oninput="draw()">
+    <label for="show_col_lines">color-lines</label>
     <br>
-    <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geomChange()" checked>
+    <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geom_change()" checked>
     <label for="geom_align_quad">Aligned Quads</label>
     &nbsp;&nbsp;&nbsp;&nbsp;
-    x-count:<input id="aquads_xcount" class="num_input" type="number" value="15" oninput="geomChange()">
-    y-count:<input id="aquads_ycount" class="num_input" type="number" value="10" oninput="geomChange()">
+    x-count:<input id="aquads_xcount" class="num_input" type="number" value="15" oninput="geom_change()">
+    y-count:<input id="aquads_ycount" class="num_input" type="number" value="10" oninput="geom_change()">
     <br>
-    <input id="geom_tri" type="radio" name="geom_sel" oninput="geomChange()" checked>
+    <input id="geom_tri" type="radio" name="geom_sel" oninput="geom_change()" checked>
     <label for="geom_tri">Triangles</label>
     &nbsp;&nbsp;&nbsp;&nbsp;
-    point-count:<input id="tri_count" class="num_input" type="number" value="100" step="10" oninput="geomChange()">
-    rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geomChange()">
+    point-count:<input id="tri_count" class="num_input" type="number" value="100" step="10" oninput="geom_change()">
+    rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geom_change()">
 
 
 </body>
