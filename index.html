@@ -22,13 +22,15 @@ function dist(a, b) {
 
 function start()
 {
+    setupMouseHandlers()
+    ctx = canvas.getContext('2d')
+
     WIDTH = canvas.width - 2*MARGIN
     HEIGHT = canvas.height - 2*MARGIN
 
-    col_points = [[0,0,"#ff0000"], [1,0,"#00ff00"], [1,1,"#0000ff"], [0,1,"#ff00ff"]]
-    setupMouseHandlers()
+    col_points = [[0,0, 1,0,0], [1,0, 0,1,0], [1,1, 0,0,1], [0,1, 1,0,1]]  // x,y, r,b,g
+    col_img = ctx.createImageData(WIDTH, HEIGHT);
 
-    ctx = canvas.getContext('2d')
     geom_change()
     col_change()
 }
@@ -37,11 +39,14 @@ var points = []
 var lines = []
 var col_points = []
 var col_lines = []
+var col_img = null
+var marked_col_point = null
 
 function setupMouseHandlers()
 {
     var mouseStart = null
     var selected_point = null
+    var sel_col_point = null
 
     canvas.addEventListener("mousedown", function(e) {
         var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
@@ -59,10 +64,14 @@ function setupMouseHandlers()
                 }
             }
         }
+        if (show_col_point_handles.checked) {
+
+        }
     })
     document.addEventListener("mouseup", function(e) {
         mouseStart = null
         selected_point = null
+        sel_col_point = null
     })
     canvas.addEventListener("mousemove", function(e) {
         var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
@@ -175,11 +184,84 @@ function geom_change()
     draw()
 }
 
+function vec_sub(a, b) {
+    return [a[0]-b[0], a[1]-b[1]]
+}
+function cross(a, b) {
+    return a[0]*b[1]-a[1]*b[0]
+}
+function dot(a, b) {
+    return a[0]*b[0]+a[1]*b[1]
+}
+function col_mult(f, p) {
+    return [f*p[2], f*p[3], f*p[4]]
+}
+function col_add3(a, b, c) {
+    return [a[0]+b[0]+c[0], a[1]+b[1]+c[1], a[2]+b[2]+c[2]]
+}
+
 function col_change()
 {
     var delaunay = Delaunator.from(col_points)
     var triangles = delaunay.triangles
     col_lines = triangles_lines(triangles, col_points)
+
+    // prepare triangle vectors
+    var tri_vecs = []  // list of tripets of vectors
+    for (var i = 0; i < triangles.length; i += 3) {
+        var A = col_points[ triangles[i] ];
+        var B = col_points[ triangles[i + 1] ];
+        var C = col_points[ triangles[i + 2] ];
+        var AB = vec_sub(B,A)
+        var AC = vec_sub(C,A)
+        tri_vecs.push({A:A,B:B,C:C,AB:AB,AC:AC})
+    }
+
+    // draw pixels
+    var dt = col_img.data;
+    ctx.fillStyle = "#ff0000"
+
+    //var tv = tri_vecs[0]
+
+    for(var iy = 0; iy < HEIGHT; ++iy) {
+        var y = iy / HEIGHT
+        for(var ix = 0; ix < WIDTH; ++ix) {
+            var x = ix / WIDTH
+            var p = [x,y]
+
+            for(var tvi in tri_vecs) {
+                var tv = tri_vecs[tvi]
+                var v0 = tv.AC
+                var v1 = tv.AB
+                var v2 = vec_sub(p, tv.A)
+
+                var dot00 = dot(v0, v0)
+                var dot01 = dot(v0, v1)
+                var dot02 = dot(v0, v2)
+                var dot11 = dot(v1, v1)
+                var dot12 = dot(v1, v2)
+
+                var invDenom = 1 / (dot00 * dot11 - dot01 * dot01)
+                var u = (dot11 * dot02 - dot01 * dot12) * invDenom
+                var v = (dot00 * dot12 - dot01 * dot02) * invDenom
+
+                if ((u >= 0) && (v >= 0) && (u + v < 1)) {
+                    var w = 1 - u - v
+                    var col = col_add3( col_mult(w, tv.A), col_mult(v, tv.B), col_mult(u, tv.C) )
+
+                    var offset = 4*(iy*WIDTH+ix)
+                    dt[offset] = col[0]*255;
+                    dt[offset+1] = col[1]*255;
+                    dt[offset+2] = col[2]*255;
+                    dt[offset+3] = 255;
+
+                    //ctx.fillRect( ix+MARGIN, iy+MARGIN, 1, 1 );
+                }
+            }
+        }
+    }
+
+    //ctx.putImageData(col_img, MARGIN, MARGIN)
 
     draw()
 }
@@ -211,7 +293,7 @@ function draw()
 {
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-
+    ctx.putImageData(col_img, MARGIN, MARGIN)
 
     if (show_geom_lines.checked)
         draw_lines(lines, 'rgba(0,0,0,1)')
@@ -254,10 +336,10 @@ body {
     <canvas id="canvas" width="800" height="600"></canvas>
     <br>
     Show:
-    <input id="show_geom_lines" type="checkbox" checked oninput="draw()">
+    <input id="show_geom_lines" type="checkbox" checke oninput="draw()">
     <label for="show_geom_lines">geom-lines</label>
     &nbsp;&nbsp;
-    <input id="show_point_handles" type="checkbox" checked oninput="draw()">
+    <input id="show_point_handles" type="checkbox" checke oninput="draw()">
     <label for="show_point_handles">points</label>
     &nbsp;&nbsp;
     <input id="show_col_point_handles" type="checkbox" checked oninput="draw()">
