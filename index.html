@@ -4,10 +4,13 @@
     <meta charset="UTF-8">
     <title>Abstract Art</title>
     <script src="delaunator.js"></script>
+    <script type="text/javascript" src="color.all.min.js"></script> <!-- https://github.com/PitPik/colorPicker  -->
+    <script type="text/javascript" src="jsColor.js"></script>
 <script>
 "use strict";
 
 var ctx = null
+var small_ctx = null
 var MARGIN = 10
 var WIDTH = null
 var HEIGHT = null
@@ -23,7 +26,11 @@ function dist(a, b) {
 function start()
 {
     setupMouseHandlers()
+    setupColorPicker()
+
     ctx = canvas.getContext('2d')
+    //ctx.imageSmoothingEnabled = false; // makes interpolation while moving blocky
+    small_ctx = small_canvas.getContext('2d')
 
     WIDTH = canvas.width - 2*MARGIN
     HEIGHT = canvas.height - 2*MARGIN
@@ -31,16 +38,58 @@ function start()
     col_points = [[0,0, 1,0,0], [1,0, 0,1,0], [1,1, 0,0,1], [0,1, 1,0,1]]  // x,y, r,b,g
     col_img = ctx.createImageData(WIDTH, HEIGHT);
 
+    small_canvas.width = WIDTH/10
+    small_canvas.height = HEIGHT/10
+    small_img = small_ctx.createImageData(small_canvas.width, small_canvas.height);
+
     geom_change()
-    col_change()
+    col_change(col_img)
+}
+
+function changeColorEdit(colors)
+{
+    if (marked_col_point == null)
+        return
+    marked_col_point[2] = colors.rgb.r
+    marked_col_point[3] = colors.rgb.g
+    marked_col_point[4] = colors.rgb.b
+    col_change(small_img)
+    // TBD full resolution color
+}
+
+function setupColorPicker()
+{
+    var colorPickCfg = {
+        customBG: '#222',
+        readOnly: false,
+        // patch: false,
+        init: function(elm, colors) { // colors is a different instance (not connected to colorPicker)
+          elm.style.backgroundColor = elm.value;
+          // used to be rgbaMixCustom the color mixed with the customBG color (not relevant for me since alpha is 1.0 always)
+          // if it is NaN, the check is false and the default is the
+          elm.style.color = colors.rgbaMixWhite.luminance <= 0.22 ? '#ddd' : '#222';
+        },
+        initStyle: 'display: hidden',
+        mode: 'hsv-h',
+        noAlpha: true,
+        size: 1,
+        displayCallback:changeColorEdit,
+        multipleInstances:true
+    }
+    jsColorPicker('input.color', colorPickCfg);
+    colorPoint.addEventListener("focus", function() { changedColFocus(colorPoint, true, 0) })
+    colorPoint.addEventListener("blur", function() { changedColFocus(colorPoint, false, 0) })
+    colorPoint.focus()
+    colorPoint.blur()
 }
 
 var points = []
 var lines = []
 var col_points = []
 var col_lines = []
-var col_img = null
+var col_img = null, small_img = null
 var marked_col_point = null
+var inset_lines = [], trimmed_inset_lines = []
 
 function setupMouseHandlers()
 {
@@ -65,10 +114,29 @@ function setupMouseHandlers()
             }
         }
         if (show_col_point_handles.checked) {
-
+            sel_col_point = null
+            for(var pi in col_points) {
+                var p = col_points[pi]
+                if (mdist(mouseStart, p) < 10/WIDTH) {
+                    sel_col_point = p
+                    marked_col_point = p
+                    break
+                }
+            }
+            if (sel_col_point == null) {
+                sel_col_point = [x,y, 0,0,0]
+                marked_col_point = sel_col_point
+                col_points.push(sel_col_point)
+            }
+            marked_point_changed()
+            col_change(small_img)
         }
     })
     document.addEventListener("mouseup", function(e) {
+        if (sel_col_point != null) {
+            col_change(col_img)
+        }
+
         mouseStart = null
         selected_point = null
         sel_col_point = null
@@ -79,9 +147,24 @@ function setupMouseHandlers()
         if (selected_point != null) {
             selected_point[0] = x
             selected_point[1] = y
+            calc_triangulation()
             draw()
         }
+        if (sel_col_point != null) {
+            sel_col_point[0] = x
+            sel_col_point[1] = y
+            col_change(small_img)
+        }
     })
+}
+
+function marked_point_changed() {
+    var c = new Colors({color:"rgb("+ Math.round(marked_col_point[2]*255) + ","
+                                    + Math.round(marked_col_point[3]*255) + ","
+                                    + Math.round(marked_col_point[4]*255) + ")"})
+    if (isNaN(c.colors.rgb.r) || isNaN(c.colors.rgb.g) || isNaN(c.colors.rgb.b))
+        return
+    window.jsColorPicker.colorPickers[0].setColor(c.colors.HEX, undefined, undefined, true)
 }
 
 var rnd_state = 0
@@ -153,6 +236,7 @@ function geom_change()
                     lines.push( [ mat[xi][yi], mat[xi][yi+1] ] )
             }
         }
+        draw()
     }
     else if (geom_tri.checked)
     {
@@ -176,16 +260,93 @@ function geom_change()
             points.push(bestCandidate)
         }
 
-        var delaunay = Delaunator.from(points)
-        lines = triangles_lines(delaunay.triangles, points)
+        calc_triangulation()
+    }
+
+
+}
+
+// https://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect
+function get_line_intersection(l0, l1) {
+    var p0_x = l0[0][0], p0_y = l0[0][1]
+    var p1_x = l0[1][0], p1_y = l0[1][1]
+    var p2_x = l1[0][0], p2_y = l1[0][1]
+    var p3_x = l1[1][0], p3_y = l1[1][1]
+
+    var s1_x = p1_x - p0_x;
+    var s1_y = p1_y - p0_y;
+    var s2_x = p3_x - p2_x;
+    var s2_y = p3_y - p2_y;
+
+    var s = (-s1_y * (p0_x - p2_x) + s1_x * (p0_y - p2_y)) / (-s2_x * s1_y + s1_x * s2_y);
+    var t = ( s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) / (-s2_x * s1_y + s1_x * s2_y);
+
+    if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
+    {
+        // Collision detected
+        var i_x = p0_x + (t * s1_x);
+        var i_y = p0_y + (t * s1_y);
+        return [i_x, i_y];
+    }
+
+    return null; // No collision
+}
+
+
+function calc_triangulation()
+{
+    // https://github.com/mapbox/delaunator
+    var delaunay = Delaunator.from(points)
+    lines = triangles_lines(delaunay.triangles, points)
+
+    var line_width_n = parseInt(line_width.value)/200
+    if (line_width_n == 0)
+        return
+
+    //inset_points = []
+    inset_lines = []
+    for(var li in lines) {
+        var l = lines[li]
+        var lvec = normalized(vec_sub(l[1], l[0]))
+        var ovec = [lvec[1], -lvec[0]]  // orthogonal
+        ovec[0] *= line_width_n
+        ovec[1] *= line_width_n
+        var p0 = vec_add(l[0], ovec)
+        var p1 = vec_add(l[1], ovec)
+        inset_lines.push( [p0,p1] )
+    }
+
+    trimmed_inset_lines = []
+    // for each triangle find inset lines intersections
+    for (var i = 0; i < inset_lines.length; i += 3) {
+        var l0 = inset_lines[i]
+        var l1 = inset_lines[i+1]
+        var l2 = inset_lines[i+2]
+        var p0 = get_line_intersection(l0, l1)
+        var p1 = get_line_intersection(l1, l2)
+        var p2 = get_line_intersection(l2, l0)
+        if (p0 === null || p1 === null || p2 === null)
+            continue
+        trimmed_inset_lines.push( [p0, p1] )
+        trimmed_inset_lines.push( [p1, p2] )
+        trimmed_inset_lines.push( [p2, p0] )
 
     }
 
     draw()
 }
 
+
+function normalized(a) {
+    var len = Math.sqrt(a[0]*a[0] + a[1]*a[1])
+    return [a[0]/len, a[1]/len]
+}
+
 function vec_sub(a, b) {
     return [a[0]-b[0], a[1]-b[1]]
+}
+function vec_add(a, b) {
+    return [a[0]+b[0], a[1]+b[1]]
 }
 function cross(a, b) {
     return a[0]*b[1]-a[1]*b[0]
@@ -200,8 +361,10 @@ function col_add3(a, b, c) {
     return [a[0]+b[0]+c[0], a[1]+b[1]+c[1], a[2]+b[2]+c[2]]
 }
 
-function col_change()
+function col_change(img)
 {
+    if (col_points.length == 0)
+        return
     var delaunay = Delaunator.from(col_points)
     var triangles = delaunay.triangles
     col_lines = triangles_lines(triangles, col_points)
@@ -218,17 +381,15 @@ function col_change()
     }
 
     // draw pixels
-    var dt = col_img.data;
-    ctx.fillStyle = "#ff0000"
+    var dt = img.data;
 
-    //var tv = tri_vecs[0]
-
-    for(var iy = 0; iy < HEIGHT; ++iy) {
-        var y = iy / HEIGHT
-        for(var ix = 0; ix < WIDTH; ++ix) {
-            var x = ix / WIDTH
+    for(var iy = 0; iy < img.height; ++iy) {
+        var y = iy / img.height
+        for(var ix = 0; ix < img.width; ++ix) {
+            var x = ix / img.width
             var p = [x,y]
 
+            // http://blackpawn.com/texts/pointinpoly/default.html
             for(var tvi in tri_vecs) {
                 var tv = tri_vecs[tvi]
                 var v0 = tv.AC
@@ -245,25 +406,24 @@ function col_change()
                 var u = (dot11 * dot02 - dot01 * dot12) * invDenom
                 var v = (dot00 * dot12 - dot01 * dot02) * invDenom
 
-                if ((u >= 0) && (v >= 0) && (u + v < 1)) {
+                if ((u >= 0) && (v >= 0) && (u + v <= 1.000001)) { // without epsilon there are white pixels at the top,left edge
                     var w = 1 - u - v
                     var col = col_add3( col_mult(w, tv.A), col_mult(v, tv.B), col_mult(u, tv.C) )
 
-                    var offset = 4*(iy*WIDTH+ix)
+                    var offset = 4*(iy*img.width+ix)
                     dt[offset] = col[0]*255;
                     dt[offset+1] = col[1]*255;
                     dt[offset+2] = col[2]*255;
                     dt[offset+3] = 255;
 
-                    //ctx.fillRect( ix+MARGIN, iy+MARGIN, 1, 1 );
+                    break // found the triangle this pixel is in
+
                 }
             }
         }
     }
 
-    //ctx.putImageData(col_img, MARGIN, MARGIN)
-
-    draw()
+    draw(img)
 }
 
 function draw_points(points, col)
@@ -289,11 +449,22 @@ function draw_lines(lines, col)
     ctx.stroke()
 }
 
-function draw()
+function draw(img)
 {
+    if (img === undefined)
+        img = col_img
+
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.putImageData(col_img, MARGIN, MARGIN)
+
+    if (show_col_back.checked) {
+        if (img === col_img)
+            ctx.putImageData(img, MARGIN, MARGIN)
+        else {
+            small_ctx.putImageData(img, 0, 0)
+            ctx.drawImage(small_canvas, MARGIN, MARGIN, WIDTH, HEIGHT)
+        }
+    }
 
     if (show_geom_lines.checked)
         draw_lines(lines, 'rgba(0,0,0,1)')
@@ -301,14 +472,49 @@ function draw()
     if (show_point_handles.checked)
         draw_points(points, "rgba(255,20,20,0.6)")
 
-    if (show_col_point_handles.checked)
+    if (show_col_point_handles.checked) {
         draw_points(col_points, "rgba(20,20,255,0.6)")
+        if (marked_col_point != null) {
+            ctx.beginPath();
+            ctx.arc(marked_col_point[0]*WIDTH+MARGIN, marked_col_point[1]*HEIGHT+MARGIN, 6, 0, 2 * Math.PI, false);
+            ctx.strokeStyle = "#ffffff"
+            ctx.stroke()
+            ctx.beginPath();
+            ctx.arc(marked_col_point[0]*WIDTH+MARGIN, marked_col_point[1]*HEIGHT+MARGIN, 7, 0, 2 * Math.PI, false);
+            ctx.strokeStyle = "#000000"
+            ctx.stroke()
+        }
+    }
 
     if (show_col_lines.checked)
         draw_lines(col_lines, 'rgb(160,0,0,1)')
 
+    if (show_inset_lines.checked)
+        draw_lines(inset_lines, 'rgb(255,20,20)')
+    if (show_trim_inset_lines.checked)
+        draw_lines(trimmed_inset_lines, 'rgb(30,30,255)')
+
 }
 
+function changedColorText()
+{
+    var c = new Colors({color:"#000000"})
+    c.setColor(colorPoint.value)
+    if (isNaN(c.colors.rgb.r) || isNaN(c.colors.rgb.g) || isNaN(c.colors.rgb.b))
+        return
+    colorPoint.colorPoint = true
+    window.jsColorPicker.colorPickers[0].setColor(colorPoint.value, undefined, undefined, true)
+}
+
+function changedColFocus(ed, v, idx) {
+    ed.beingEditedNow = v
+    // selects the window of the picker
+    window.jsColorPicker.colorPickers[idx].nodes.colorPicker.onmousedown = function() {
+        // simulate out of focus in case we just edited the text and are now moving the knob
+        ed.beingEditedNow = false
+    }
+    col_change(col_img) // to high res
+}
 
 </script>
 <style>
@@ -326,41 +532,77 @@ body {
 #canvas {
     border: 1px solid #000000;
 }
+#small_canvas {
+    border: 1px solid #000000;
+}
 .num_input {
     width: 50px;
 }
+.hidden {
+    position: absolute;
+    z-index: -2;
+    opacity: 0;
+}
+#colorPoint {
+    width: 150px;
+    height: 20px;
+    border: 1px solid #aaa;
+    border-radius: 4px;
+    padding: 1px;
+    font-family: monospace;
+    font-size: 120%;
+    text-align: center;
+    margin: 2px;
+}
+
 
 </style>
 </head>
 <body onload="start()">
     <canvas id="canvas" width="800" height="600"></canvas>
+    <canvas id="small_canvas" class="hidden" width="1" height="1"></canvas>
     <br>
-    Show:
-    <input id="show_geom_lines" type="checkbox" checke oninput="draw()">
-    <label for="show_geom_lines">geom-lines</label>
-    &nbsp;&nbsp;
-    <input id="show_point_handles" type="checkbox" checke oninput="draw()">
-    <label for="show_point_handles">points</label>
-    &nbsp;&nbsp;
-    <input id="show_col_point_handles" type="checkbox" checked oninput="draw()">
-    <label for="show_col_point_handles">color-points</label>
-    &nbsp;&nbsp;
-    <input id="show_col_lines" type="checkbox" checked oninput="draw()">
-    <label for="show_col_lines">color-lines</label>
-    <br>
-    <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geom_change()" checked>
-    <label for="geom_align_quad">Aligned Quads</label>
-    &nbsp;&nbsp;&nbsp;&nbsp;
-    x-count:<input id="aquads_xcount" class="num_input" type="number" value="15" oninput="geom_change()">
-    y-count:<input id="aquads_ycount" class="num_input" type="number" value="10" oninput="geom_change()">
-    <br>
-    <input id="geom_tri" type="radio" name="geom_sel" oninput="geom_change()" checked>
-    <label for="geom_tri">Triangles</label>
-    &nbsp;&nbsp;&nbsp;&nbsp;
-    point-count:<input id="tri_count" class="num_input" type="number" value="100" step="10" oninput="geom_change()">
-    rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geom_change()">
+    <div id="controls">
+        Show:
+        <input id="show_geom_lines" type="checkbox" checked oninput="draw()">
+        <label for="show_geom_lines">geom-lines</label>
+        &nbsp;&nbsp;
+        <input id="show_point_handles" type="checkbox" checked oninput="draw()">
+        <label for="show_point_handles">points</label>
+        &nbsp;&nbsp;
+        <input id="show_col_point_handles" type="checkbox" checke oninput="draw()">
+        <label for="show_col_point_handles">color-points</label>
+        &nbsp;&nbsp;
+        <input id="show_col_lines" type="checkbox" checke oninput="draw()">
+        <label for="show_col_lines">color-lines</label>
+        &nbsp;&nbsp;
+        <input id="show_col_back" type="checkbox" checke oninput="draw()">
+        <label for="show_col_back">back-color</label>
+        &nbsp;&nbsp;
+        <input id="show_inset_lines" type="checkbox" checke oninput="draw()">
+        <label for="show_inset_lines">inset-lines</label>
+        <br>
+        <input id="show_trim_inset_lines" type="checkbox" checked oninput="draw()">
+        <label for="show_trim_inset_lines">inset-lines</label>
 
 
+        <br>
+        <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geom_change()" checked>
+        <label for="geom_align_quad">Aligned Quads</label>
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        x-count:<input id="aquads_xcount" class="num_input" type="number" value="15" oninput="geom_change()">
+        y-count:<input id="aquads_ycount" class="num_input" type="number" value="10" oninput="geom_change()">
+        <br>
+        <input id="geom_tri" type="radio" name="geom_sel" oninput="geom_change()" checked>
+        <label for="geom_tri">Triangles</label>
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        point-count:<input id="tri_count" class="num_input" type="number" value="4" step="2" oninput="geom_change()">
+        rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geom_change()">
+        <br>
+        Color-point:&nbsp;<input id="colorPoint" class="color" oninput="changedColorText(0, true)"/>
+        <br>
+        Line-width:<input id="line_width" class="num_input" type="number" value="5" oninput="calc_triangulation()">
+    </div>
 </body>
 </html>
 
