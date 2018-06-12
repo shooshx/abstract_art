@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <title>Abstract Art</title>
     <script src="delaunator.js"></script>
-    <script type="text/javascript" src="color.all.min.js"></script> <!-- https://github.com/PitPik/colorPicker  -->
-    <script type="text/javascript" src="jsColor.js"></script>
+   <!-- <script type="text/javascript" src="color.all.min.js"></script> <!-- https://github.com/PitPik/colorPicker  -->
+    <!--<script type="text/javascript" src="jsColor.js"></script> -->
+    <script src="rounding.js"></script>
 <script>
 "use strict";
 
@@ -26,7 +27,7 @@ function dist(a, b) {
 function start()
 {
     setupMouseHandlers()
-    setupColorPicker()
+    //setupColorPicker()
 
     ctx = canvas.getContext('2d')
     //ctx.imageSmoothingEnabled = false; // makes interpolation while moving blocky
@@ -89,12 +90,16 @@ var geom_points = []  // geometry lines (generated triangles or squares)
 var geom_triangles = null // triangles as returned from delaunay for the geom points
 var geom_polys = []  // list of lists of points, each is an individual polygon
 var col_points = []  // polot pivots, each element is [x,y, r,g,b]
-var col_polys = []  // list of liest of color pivot points
+var col_polys = []  // list of list of color pivot points
 var col_full = null, small_img = null  // full scale and down scale color images
 var marked_col_point = null  // last point selected by the mouse
 var inset_lines = []   // base lines that are a certain distance from the mesh lines
 var trimmed_inset_polys = []  // list of lists of points making poly of the above lines trimmed at their intersections
 var descrete_color = []  // for every poly in the above list, list a color that is the average from the color image
+var geom_halfedge = null
+var junction_polys = null // list of lists of points - polygons of the junctions (meeting of several triangles)
+var round_path = null
+
 
 function setupMouseHandlers()
 {
@@ -305,12 +310,16 @@ function get_line_intersection(l0, l1) {
     return null; // No collision
 }
 
+// map line lidex pair (indices of points of origins of the lines) to the coordinate of their intersection
+// used for drawing the junction-points
+var inset_intersections = null
 
 function calc_triangulation()
 {
     // https://github.com/mapbox/delaunator
     var delaunay = Delaunator.from(geom_points)
     geom_triangles = delaunay.triangles
+    geom_halfedge = delaunay.halfedges
     geom_polys = triangles_polys(geom_triangles, geom_points)
     var geom_lines = triangles_lines(geom_triangles, geom_points)
 
@@ -331,6 +340,8 @@ function calc_triangulation()
     }
 
     trimmed_inset_polys = []
+    inset_intersections = []
+    
     // for each triangle find inset lines intersections
     for (var i = 0; i < inset_lines.length; i += 3) {
         var l0 = inset_lines[i]
@@ -342,7 +353,13 @@ function calc_triangulation()
         if (p0 === null || p1 === null || p2 === null)
             continue
         trimmed_inset_polys.push( [p0, p1, p2] )
+        
+        inset_intersections[ [geom_triangles[i], geom_triangles[i+1]] ] = p0
+        inset_intersections[ [geom_triangles[i+1], geom_triangles[i+2]] ] = p1
+        inset_intersections[ [geom_triangles[i+2], geom_triangles[i]] ] = p2
     }
+    do_junctions()
+    do_round_corners()
     descrete_colors(col_img_last) // triangulation changes the averaging of color
 
     draw()
@@ -487,10 +504,10 @@ function descrete_colors(img)
 }
 
 function getX(p) {
-    return p[0]*WIDTH+MARGIN
+    return Math.round(p[0]*WIDTH+MARGIN)
 }
 function getY(p) {
-    return p[1]*HEIGHT+MARGIN
+    return Math.round(p[1]*HEIGHT+MARGIN)
 }
 
 function draw_points(points, col)
@@ -519,7 +536,21 @@ function path_lines(lines) {
     }
 }
 
+//var COLOR_INSET_FILL = "rgb(255,255,255)"
+var COLOR_INSET_FILL = "rgb(50,50,240)"
+var UNIT_FRAME = [[0,0],[1,0],[1,1],[0,1]]
 
+// go over indices of the triangle this index is in, wrap around groups of 3
+function prev_index_in_tri(idx) {
+    if ( (idx % 3) == 0)
+        return idx + 2
+    return idx - 1
+}
+function next_index_in_tri(idx) {
+    if ( ((idx+1) % 3) == 0)
+        return idx - 2
+    return idx + 1
+}
 
 function draw()
 {
@@ -581,15 +612,95 @@ function draw()
     if (show_inset_fill_lines.checked) {
         path_poly_lines(trimmed_inset_polys)
         // fo the frame to negate everything inside
-        path_poly([[0,0],[1,0],[1,1],[0,1]])
-        ctx.fillStyle = "rgb(255,255,255)"
+        path_poly(UNIT_FRAME)
+        ctx.fillStyle = COLOR_INSET_FILL
         ctx.fill()
+    }
+    
+    if (show_junctions.checked) {
+        path_poly_lines(junction_polys)
+        ctx.fillStyle = "rgb(255,0,255)"
+        ctx.fill()
+    }
+    
+    if (show_rounded_svg.checked) {
+        ctx.fillStyle = "rgb(255,20,255)"
+        ctx.fill(round_path)
+        //ctx.drawImage(rounded_svg, MARGIN, MARGIN, WIDTH, HEIGHT)
     }
 
     if (show_point_handles.checked)
         draw_points(geom_points, "rgba(255,20,20,0.6)")
+        
+    if (show_point_indices.checked) {
+        ctx.fillStyle = "rgb(0,0,0)"
+        ctx.font = "14px monospace"
+        for(var pi in geom_points) {
+            var p = geom_points[pi]
+            ctx.fillText(""+pi, getX(p), getY(p))
+        }
+    }
 }
 
+
+
+function do_junctions() {        
+        
+    junction_polys = []
+        
+    //console.log("------")
+
+    for(var ipnt = 0; ipnt < geom_points.length; ++ipnt) {
+        //var ipnt = 3 // point we're working on
+        // find the first halfedge coming out of ipnt
+        var edge_index = 0
+        while (geom_triangles[edge_index] != ipnt)
+            ++edge_index
+        var came_from = prev_index_in_tri(edge_index)
+        var started_at = came_from
+        // iterate around a single point
+        var junc_pnts_indices = []
+        do {
+            // the opposite halfedge to the one found
+            var opposite_edge_index = geom_halfedge[edge_index]
+            if (opposite_edge_index == -1) // on the edge there are no halfedges
+                break;
+            // next halfedge in the triangle also comes out of ipnt, wrap around groups of 3
+            var next_on_point = next_index_in_tri(opposite_edge_index)
+            // sanity
+            if (geom_triangles[next_on_point] != ipnt)
+                throw "unexpected point"
+                
+            //console.log("~~ " + geom_triangles[came_from] + " - " + geom_triangles[edge_index] + " - " + geom_triangles[opposite_edge_index])
+            var jpnt = geom_triangles[came_from]
+            junc_pnts_indices.push(jpnt)
+            
+            came_from = opposite_edge_index
+            edge_index = next_on_point
+        } while (came_from != started_at)
+        if (opposite_edge_index == -1)
+            continue
+        
+        var junc_poly = []
+        // now give the ordered indices of this junction, we can get the intersection points
+        // of adjacent rays that are pointer at ipnt
+        for(var jpi = 0; jpi < junc_pnts_indices.length; ++jpi) {
+            var pair = [junc_pnts_indices[jpi], ipnt]   // from from outer point and from ipnt
+            var isect_pnt = inset_intersections[pair]
+            if (isect_pnt === undefined)
+                break // too thick lines cause polys with no volume so no intersection occurs, need to skip this one
+            junc_poly.push(isect_pnt)
+        }
+        if (isect_pnt === undefined)
+            continue
+        junc_poly.reverse() // it turns out the wrong way
+        junction_polys.push(junc_poly)
+        
+    }
+        
+}
+
+// single poly, used for frame
 function path_poly(path) {
     ctx.moveTo(getX(path[0]), getY(path[0]))
     for(var i = 1; i < path.length; ++i)
@@ -613,6 +724,45 @@ function draw_poly_lines(poly_list, color) {
     ctx.strokeStyle = color
     ctx.stroke()
 }
+
+function do_round_corners() 
+{
+    /*function svgX(v) {
+        return v[0]*100;
+    }
+    function svgY(v) {
+        return v[1]*100;
+    }*/
+    var svgX = getX, svgY = getY
+    var rounded_str = "M " + svgX(UNIT_FRAME[0]) + " " + svgY(UNIT_FRAME[0]) +
+                       "L " + svgX(UNIT_FRAME[1]) + " " + svgY(UNIT_FRAME[1]) +
+                       "L " + svgX(UNIT_FRAME[2]) + " " + svgY(UNIT_FRAME[2]) +
+                       "L " + svgX(UNIT_FRAME[3]) + " " + svgY(UNIT_FRAME[3]) + "Z " // from to make the rest of the triangle negative space 
+    //rounded_str = ""
+                       
+                   
+    function add_poly_to_svg(polylst, radius) {
+        // convert to svg polyline
+        for(var i = 0; i < polylst.length; ++i) {
+            var poly = polylst[i]
+            var pathstr = "M " + svgX(poly[0]) + " " + svgY(poly[0]) + " "
+            for(var pi = 1; pi < poly.length; ++pi)
+                pathstr += "L " + svgX(poly[pi]) + " " + svgY(poly[pi]) + " "
+            pathstr += "Z"
+            var this_rounded = roundPathCorners(pathstr, parseInt(radius), false)
+            rounded_str += this_rounded
+        }
+    }
+    
+    add_poly_to_svg(trimmed_inset_polys, rounding_val.value)
+    add_poly_to_svg(junction_polys, junction_radius.value)
+    
+    round_path = new Path2D(rounded_str)
+    
+    
+    testpath.setAttribute('d', rounded_str)
+}
+
 
 function changedColorText()
 {
@@ -681,35 +831,46 @@ body {
     <br>
     <div id="controls">
         Show:
-        <input id="show_geom_lines" type="checkbox" checked oninput="draw()">
+        <input id="show_geom_lines" type="checkbox" checke onchange="draw()">
         <label for="show_geom_lines">geom-lines</label>
         &nbsp;&nbsp;
-        <input id="show_point_handles" type="checkbox" checked oninput="draw()">
+        <input id="show_point_handles" type="checkbox" checke onchange="draw()">
         <label for="show_point_handles">points</label>
         &nbsp;&nbsp;
-        <input id="show_col_point_handles" type="checkbox" checke oninput="draw()">
+        <input id="show_col_point_handles" type="checkbox" checke onchange="draw()">
         <label for="show_col_point_handles">color-points</label>
         &nbsp;&nbsp;
-        <input id="show_col_lines" type="checkbox" checke oninput="draw()">
+        <input id="show_col_lines" type="checkbox" checke onchange="draw()">
         <label for="show_col_lines">color-lines</label>
         &nbsp;&nbsp;
-        <input id="show_col_back" type="checkbox" checked oninput="draw()">
+        <input id="show_col_back" type="checkbox" checke onchange="draw()">
         <label for="show_col_back">back-color</label>
         &nbsp;&nbsp;
-        <input id="show_inset_lines" type="checkbox" checke oninput="draw()">
+        <input id="show_inset_lines" type="checkbox" checke onchange="draw()">
         <label for="show_inset_lines">inset-lines</label>
         <br>
-        <input id="show_trim_inset_lines" type="checkbox" checke oninput="draw()">
+        <input id="show_trim_inset_lines" type="checkbox" checke onchange="draw()">
         <label for="show_trim_inset_lines">trim-inset-lines</label>
 <!--        &nbsp;&nbsp;
-        <input id="show_inset_fill" type="checkbox" checke oninput="draw()">
+        <input id="show_inset_fill" type="checkbox" checke onchange="draw()">
         <label for="show_inset_fill">inset-fill</label>-->
         &nbsp;&nbsp;
-        <input id="show_inset_fill_lines" type="checkbox" checked oninput="draw()">
+        <input id="show_inset_fill_lines" type="checkbox" checke onchange="draw()">
         <label for="show_inset_fill_lines">inset-fill</label>
         &nbsp;&nbsp;
-        <input id="show_average_colors" type="checkbox" checked oninput="draw()">
+        <input id="show_junctions" type="checkbox" checke onchange="draw()">
+        <label for="show_junctions">junctions</label>
+        &nbsp;&nbsp;        
+        <input id="show_average_colors" type="checkbox" checke onchange="draw()">
         <label for="show_average_colors">average-color</label>
+        &nbsp;&nbsp;        
+        <input id="show_point_indices" type="checkbox" checke onchange="draw()">
+        <label for="show_point_indices">point-indices</label>    
+        <br>
+        <input id="show_rounded_svg" type="checkbox" checked onchange="draw()">
+        <label for="show_rounded_svg">rounded-overlay</label>    
+            
+        
         <hr>
         <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geom_change()" checked>
         <label for="geom_align_quad">Aligned Quads</label>
@@ -720,13 +881,25 @@ body {
         <input id="geom_tri" type="radio" name="geom_sel" oninput="geom_change()" checked>
         <label for="geom_tri">Triangles</label>
         &nbsp;&nbsp;&nbsp;&nbsp;
-        point-count:<input id="tri_count" class="num_input" type="number" value="50" step="2" oninput="geom_change()">
-        rand-seed:<input id="tri_seed" class="num_input" type="number" value="1" oninput="geom_change()">
+        point-count:<input id="tri_count" class="num_input" type="number" value="6" step="2" oninput="geom_change()">
+        rand-seed:<input id="tri_seed" class="num_input" type="number" value="4" oninput="geom_change()">
         <br>
         Color-point:&nbsp;<input id="colorPoint" class="color" oninput="changedColorText(0, true)"/>
         <br>
         Line-width:<input id="line_width" class="num_input" type="number" value="1.5" step="0.2" oninput="calc_triangulation()">
         <input type="button" value="Full-res Color" onclick="col_change(col_full)">
+        <br>
+        <input id="round_corners" type="checkbox" checked onchange="calc_triangulation()">
+        <label for="round_corners">Round-corners, Radius</label>
+        <input id="rounding_val" type="number" class="num_input" value="35" oninput="calc_triangulation()">
+        <input id="add_junction_points" type="checkbox" checked onchange="calc_triangulation()">
+        <label for="add_junction_points">Junction-points, Radius</label>
+        <input id="junction_radius" type="number" class="num_input" value="5" oninput="calc_triangulation()">
+        
+        <br>
+        <svg id="rounded_svg" class="hidden" width="780" height="580" viewBox="0 0 800 600">
+          <path id="testpath" d="M0 0 L 100 0 L100 100 L 0 100 Z M200 200 L 300 200 L250 300 Z" fill="red" stroke="none" stroke-width="1" />
+        </svg>        
     </div>
 </body>
 </html>
