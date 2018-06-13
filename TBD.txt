@@ -1,12 +1,14 @@
 shape
-  square grid
-  triangulation on random points
-  ability to move points manually
   slight move randomally
-  lines
+  
+  animation between seeds?
 
 color
-  linear gradient on triangulation of points
-  average across a triangle
+  average in junctions
+
+measure everything in independant percentage
+draw points while scrolled
+add points
+confirm new seed if there are manual changes
 
 crop
