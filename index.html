@@ -117,15 +117,19 @@ function setupMouseHandlers()
             selected_point = null
             for(var pi in geom_points) {
                 var p = geom_points[pi]
-                if (mdist(mouseStart, p) < 7/WIDTH) {
+                if (mdist(mouseStart, p) < 10/WIDTH) {
                     selected_point = p
                     break
                 }
             }
-            if (selected_point != null)
-                return
+            if (selected_point == null) {
+                selected_point = [x,y] // add a new one
+                geom_points.push(selected_point)
+            }
+            calc_triangulation()
+            draw()
         }
-        if (show_col_point_handles.checked) {
+        else if (show_col_point_handles.checked) {
             sel_col_point = null
             for(var pi in col_points) {
                 var p = col_points[pi]
@@ -156,7 +160,6 @@ function setupMouseHandlers()
             selected_point[0] = x
             selected_point[1] = y
             calc_triangulation()
-            draw()
         }
         if (sel_col_point != null) {
             sel_col_point[0] = x
@@ -909,7 +912,10 @@ body {
         <br>
         <input id="show_rounded_svg" type="checkbox" checke onchange="draw()">
         <label for="show_rounded_svg">rounded-overlay</label>    
-            
+        &nbsp;&nbsp;        
+        <input id="remove_pnt" type="checkbox" checke onchange="draw()">
+        <label for="remove_pnt">dbl-click-remove</label>    
+        
         
         <hr>
         <input id="geom_align_quad" type="radio" name="geom_sel" oninput="geom_change()" checked>

@@ -4,11 +4,13 @@ shape
   animation between seeds?
 
 color
-  average in junctions
+
 
 measure everything in independant percentage
 draw points while scrolled
-add points
+remove points
 confirm new seed if there are manual changes
+rounded should be become ugly
+same width??
 
 crop
