@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <title>Abstract Art</title>
     <script src="delaunator.js"></script>
-   <!-- <script type="text/javascript" src="color.all.min.js"></script> <!-- https://github.com/PitPik/colorPicker  -->
-    <!--<script type="text/javascript" src="jsColor.js"></script> -->
+    <script type="text/javascript" src="color.all.min.js"></script> <!-- https://github.com/PitPik/colorPicker  -->
+    <script type="text/javascript" src="jsColor.js"></script> 
     <script src="rounding.js"></script>
 <script>
 "use strict";
@@ -27,7 +27,7 @@ function dist(a, b) {
 function start()
 {
     setupMouseHandlers()
-    //setupColorPicker()
+    setupColorPicker()
 
     ctx = canvas.getContext('2d')
     //ctx.imageSmoothingEnabled = false; // makes interpolation while moving blocky
@@ -808,7 +808,11 @@ function do_round_corners()
 function changedColorText()
 {
     var c = new Colors({color:"#000000"})
-    c.setColor(colorPoint.value)
+    try {
+        c.setColor(colorPoint.value)
+    } catch(err) {
+        return // bad color formatting
+    }
     if (isNaN(c.colors.rgb.r) || isNaN(c.colors.rgb.g) || isNaN(c.colors.rgb.b))
         return
     colorPoint.colorPoint = true
