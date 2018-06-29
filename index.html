@@ -48,15 +48,21 @@ function start()
     col_change(small_img)
 }
 
-function changeColorEdit(colors)
+function changeColorEdit(colors, mode, options)
 {
-    if (marked_col_point == null)
-        return
-    marked_col_point[2] = colors.rgb.r
-    marked_col_point[3] = colors.rgb.g
-    marked_col_point[4] = colors.rgb.b
-    col_change(small_img)
-    // TBD full resolution color
+    if (options.input == colorPoint) {
+        if (marked_col_point == null)
+            return
+        marked_col_point[2] = colors.rgb.r
+        marked_col_point[3] = colors.rgb.g
+        marked_col_point[4] = colors.rgb.b
+        col_change(small_img)
+    }
+    else if (options.input == colorRound) {
+        obj_colors.round = "#"+colors.HEX
+        draw()
+    }    
+
 }
 
 function setupColorPicker()
@@ -79,10 +85,15 @@ function setupColorPicker()
         multipleInstances:true
     }
     jsColorPicker('input.color', colorPickCfg);
-    colorPoint.addEventListener("focus", function() { changedColFocus(colorPoint, true, 0) })
-    colorPoint.addEventListener("blur", function() { changedColFocus(colorPoint, false, 0) })
-    colorPoint.focus()
-    colorPoint.blur()
+    
+    function colEvents(elem) {
+        elem.addEventListener("focus", function() { changedColFocus(elem, true, 0) })
+        elem.addEventListener("blur", function() { changedColFocus(elem, false, 0) })
+        elem.focus()
+        elem.blur()
+    }
+    colEvents(colorPoint)
+    colEvents(colorRound)
 }
 
 var geom_points = []  // geometry lines (generated triangles or squares)
@@ -99,7 +110,7 @@ var descrete_color = []  // for every poly in the above list, list a color that 
 var geom_halfedge = null
 var junction_polys = null // list of lists of points - polygons of the junctions (meeting of several triangles)
 var round_path = null
-
+var obj_colors = { round:"rgb(255,20,255)"}
 
 function setupMouseHandlers()
 {
@@ -107,6 +118,16 @@ function setupMouseHandlers()
     var selected_point = null
     var sel_col_point = null
 
+    var find_pnt = function(mousep, lst) {
+        for(var pi in lst) {
+            var p = lst[pi]
+            if (mdist(mousep, p) < 10/WIDTH) {
+                return p
+            }
+        }
+        return null
+    }
+    
     canvas.addEventListener("mousedown", function(e) {
         var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
         var y = (e.clientY - canvas.offsetTop - MARGIN)/HEIGHT
@@ -114,36 +135,20 @@ function setupMouseHandlers()
 
         // select point
         if (show_point_handles.checked) {
-            selected_point = null
-            for(var pi in geom_points) {
-                var p = geom_points[pi]
-                if (mdist(mouseStart, p) < 10/WIDTH) {
-                    selected_point = p
-                    break
-                }
-            }
+            selected_point = find_pnt(mouseStart, geom_points)
             if (selected_point == null) {
                 selected_point = [x,y] // add a new one
                 geom_points.push(selected_point)
             }
             calc_triangulation()
-            draw()
         }
         else if (show_col_point_handles.checked) {
-            sel_col_point = null
-            for(var pi in col_points) {
-                var p = col_points[pi]
-                if (mdist(mouseStart, p) < 10/WIDTH) {
-                    sel_col_point = p
-                    marked_col_point = p
-                    break
-                }
-            }
+            sel_col_point = find_pnt(mouseStart, col_points)
             if (sel_col_point == null) {
                 sel_col_point = [x,y, 0,0,0]
-                marked_col_point = sel_col_point
                 col_points.push(sel_col_point)
             }
+            marked_col_point = sel_col_point
             marked_point_changed()
             col_change(small_img)
         }
@@ -165,6 +170,37 @@ function setupMouseHandlers()
             sel_col_point[0] = x
             sel_col_point[1] = y
             col_change(small_img)
+        }
+    })
+    
+    canvas.addEventListener("dblclick", function(e) {
+        if (!remove_pnt.checked)
+            return
+        var x = (e.clientX - canvas.offsetLeft - MARGIN)/WIDTH
+        var y = (e.clientY - canvas.offsetTop - MARGIN)/HEIGHT
+        var mousep = [x,y]
+        if (show_point_handles.checked) {
+            var p = find_pnt(mousep, geom_points)
+            if (p != null) {
+                var index = geom_points.indexOf(p);
+                if (index > -1) {
+                    geom_points.splice(index, 1);
+                    selected_point = null
+                    calc_triangulation()
+                }            
+            }
+        }
+        else if (show_col_point_handles.checked && col_points.length > 1) {
+            var p = find_pnt(mousep, col_points)  
+            if (p != null) {        
+                var index = col_points.indexOf(p);
+                if (index > -1) {
+                    col_points.splice(index, 1);
+                    sel_col_point = null
+                    marked_col_point = col_points[0]
+                    col_change(small_img)
+                }               
+            }
         }
     })
 }
@@ -416,6 +452,12 @@ function col_change(img) {
         dt[c_offset+2] = col[2]*255;
         dt[c_offset+3] = 255;
 
+    }, function(ix, iy) {
+        var c_offset = 4*(iy*img.width+ix)
+        dt[c_offset] = 255;
+        dt[c_offset+1] = 255;
+        dt[c_offset+2] = 255;
+        dt[c_offset+3] = 255;    
     })
     descrete_colors(img)
     col_img_last = img
@@ -423,7 +465,7 @@ function col_change(img) {
 }
 
 
-function for_every_pixel_find_tri(img, points, triangles, callback)
+function for_every_pixel_find_tri(img, points, triangles, callback, default_callback)
 {
     // prepare triangle vectors
     var tri_vecs = []  // list of tripets of vectors
@@ -441,7 +483,7 @@ function for_every_pixel_find_tri(img, points, triangles, callback)
         for(var ix = 0; ix < img.width; ++ix) {
             var x = ix / img.width
             var p = [x,y]
-
+            var found = false
             // http://blackpawn.com/texts/pointinpoly/default.html
             for(var tvi in tri_vecs) {
                 var tv = tri_vecs[tvi]
@@ -462,10 +504,12 @@ function for_every_pixel_find_tri(img, points, triangles, callback)
                 if ((u >= 0) && (v >= 0) && (u + v <= 1.000001)) { // without epsilon there are white pixels at the top,left edge
                     var w = 1 - u - v
                     callback(ix, iy, u, v, w, tv.A, tv.B, tv.C, tvi)
-
+                    found = true
                     break // found the triangle this pixel is in
                 }
             }
+            if (!found && default_callback)
+                default_callback(ix, iy)
         }
     }
 
@@ -507,7 +551,7 @@ function descrete_colors(img)
 
         color_add_to(color_sums[tvi], [r,g,b])
         ++pixel_counts[tvi]
-    })
+    }, null)
 
     for(var i = 0; i < color_sums.length; ++i) {
         if (color_sums[i] !== undefined) {
@@ -571,6 +615,8 @@ function next_index_in_tri(idx) {
 
 function draw()
 {
+    if (ctx == null)
+        return
     var img = col_img_last
 
     ctx.fillStyle = 'white'
@@ -658,7 +704,7 @@ function draw()
     }
     
     if (show_rounded_svg.checked) {
-        ctx.fillStyle = "rgb(255,20,255)"
+        ctx.fillStyle = obj_colors.round
         ctx.fill(round_path)
         //ctx.drawImage(rounded_svg, MARGIN, MARGIN, WIDTH, HEIGHT)
     }
@@ -805,18 +851,19 @@ function do_round_corners()
 }
 
 
-function changedColorText()
+function changedColorText(index, elem)
 {
     var c = new Colors({color:"#000000"})
     try {
-        c.setColor(colorPoint.value)
+        c.setColor(elem.value)
     } catch(err) {
         return // bad color formatting
     }
     if (isNaN(c.colors.rgb.r) || isNaN(c.colors.rgb.g) || isNaN(c.colors.rgb.b))
         return
-    colorPoint.colorPoint = true
-    window.jsColorPicker.colorPickers[0].setColor(colorPoint.value, undefined, undefined, true)
+    window.jsColorPicker.colorPickers[index].setColor(elem.value, undefined, undefined, true)
+    elem.colorPoint = true
+
 }
 
 function changedColFocus(ed, v, idx) {
@@ -934,7 +981,7 @@ body {
         point-count:<input id="tri_count" class="num_input" type="number" value="6" step="2" oninput="geom_change()">
         rand-seed:<input id="tri_seed" class="num_input" type="number" value="4" oninput="geom_change()">
         <br>
-        Color-point:&nbsp;<input id="colorPoint" class="color" oninput="changedColorText(0, true)"/>
+        Color-point:&nbsp;<input id="colorPoint" class="color" oninput="changedColorText(0, this)"/>
         <input type="button" value="Full-res Color" onclick="col_change(col_full)">
         <br>
         Line-width:<input id="line_width" class="num_input" type="number" value="5.5" step="0.2" min="0" oninput="calc_triangulation()">
@@ -946,6 +993,8 @@ body {
         <input id="add_junction_points" type="checkbox" checked onchange="calc_triangulation()">
         <label for="add_junction_points">Junction-points, Radius</label>
         <input id="junction_radius" type="number" class="num_input" value="5" min="0" oninput="calc_triangulation()">
+        <br>
+        Color-round:&nbsp;<input id="colorRound" class="color" oninput="changedColorText(1, this)"/>
         
         <br>
     </div>
