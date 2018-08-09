@@ -875,6 +875,65 @@ function changedColFocus(ed, v, idx) {
     }
 }
 
+var url = null
+var downFilename = "absart_"
+
+function save() {
+    var state = {}
+    for(var elem = controls.firstElementChild; elem != null; elem = elem.nextElementSibling) {
+        if (elem.tagName != 'INPUT' || elem.id.startsWith("ns_"))
+            continue
+        state[elem.id] = elem.value
+    }
+    state.geom_points = geom_points
+    state.col_points = col_points
+    
+    var text = JSON.stringify(state, null, 2)
+    //test.innerText = 
+    var blob = new Blob([text], {type: "application/json"})
+    if (url != null) {
+        URL.revokeObjectURL(url)
+    }
+    url = URL.createObjectURL(blob)
+    downLink.href = url
+    var name = downFilename + Math.floor((Math.random() * 1000) + 1) + ".json"
+    downLink.innerHTML = name
+    downLink.download = name
+    downLink.style.visibility = "visible"    
+}
+
+function load() {
+
+    if (ns_load.files.length == 0)
+        return
+    var file = ns_load.files[0]
+    
+    var reader = new FileReader();
+    reader.onload = function(e) { 
+        var text = e.target.result //, blob.type
+        state = JSON.parse(text)
+        for(var k in state) {
+            var v = state[k]
+            if (k == "geom_points") {
+                geom_points = v
+            }
+            else if (k == "col_points) {
+                col_points = v
+            }
+            else {
+                var elem = document.getElementById(k)
+                elem.value = v
+            }
+        }
+    }
+    reader.onerror = function(e) {
+        console.log(e)
+    }
+    reader.readAsDataURL(file); // read as data URL since we want to put it in an img src
+
+
+}
+
 </script>
 <style>
 body {
@@ -914,6 +973,10 @@ body {
     margin: 2px;
 }
 
+#downLink {
+    visibility: hidden;
+    margin: 0 0 0 10px;
+}
 
 </style>
 </head>
@@ -997,7 +1060,11 @@ body {
         Color-round:&nbsp;<input id="colorRound" class="color" oninput="changedColorText(1, this)"/>
         
         <br>
+        <input id="ns_load" type="file" onchange="return load()">
+        <input id="ns_save" type="button" value="Save..." onclick="save()"><a id="downLink" href=""></a>
+        <br>
     </div>
+    <div id="test"></div>
 </body>
 </html>
 
